@@ -1,0 +1,163 @@
+# Create your views here.
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.decorators import api_view, permission_classes
+from datetime import datetime
+import tempfile
+import boto3
+import torchaudio
+import torch
+import os
+import io
+import hmac
+import hashlib
+import base64
+from zonos.model import Zonos
+from zonos.conditioning import make_cond_dict
+from zonos.utils import DEFAULT_DEVICE as device
+from django.conf import settings
+# from .models import Resume
+from django.http import JsonResponse
+
+# Create your views here.
+# Zonos TTS 모델 로딩(로컬에서 1회만 실행할 수 있게 변경)
+model = Zonos.from_pretrained("./model/models--Zyphra--Zonos-v0.1-transformer", device=device)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+# @permission_classes([AllowAny])  # 인증 없이 Postman에서 테스트 가능
+def generate_followup_question(request):
+    text = request.data.get('text')
+    question_number = request.data.get('question_number')
+    user = request.user
+
+    print("type(text):", type(text))
+    print("text raw:", repr(text))
+    if not text:
+        return Response({'error': 'text field is required'}, status=400)
+
+    try:
+        torch._dynamo.reset()
+        torch._dynamo.config.suppress_errors = True
+        torch._dynamo.disable()
+        # 임시 음성 파일 로딩 (스피커 임베딩을 위한 샘플 음성)
+        # 실제 환경에서는 사용자의 음성을 업로드받거나 기본값 지정
+        audio_path = os.path.join(settings.BASE_DIR, "cloning_sample.wav")
+        speaker_wav, sampling_rate = torchaudio.load(audio_path)
+        speaker = model.make_speaker_embedding(speaker_wav, sampling_rate)
+
+        # 텍스트와 스피커 임베딩으로 conditioning 구성
+        cond_dict = make_cond_dict(
+            text=text,
+            speaker=speaker,
+            language="ko",
+            emotion=[0.15, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8],
+            speaking_rate=23.0,
+            pitch_std=20.0,
+        )
+        conditioning = model.prepare_conditioning(cond_dict)
+
+        # Zonos 모델로 음성 생성
+        codes = model.generate(conditioning)
+        wavs = model.autoencoder.decode(codes).cpu()
+
+         # 메모리 버퍼 생성
+        buffer = io.BytesIO()
+        # 메모리 버퍼에 wav 저장
+        torchaudio.save(buffer, wavs[0], model.autoencoder.sampling_rate, format="wav")
+        buffer.seek(0)  # 버퍼 위치 초기화
+
+        # S3 업로드
+        s3_client = boto3.client('s3')
+        bucket_name = settings.AWS_TTS_BUCKET_NAME
+
+        today = datetime.now().strftime("%m%d")
+        email_prefix = user.email.split('@')[0]
+        filename = f"질문 {question_number}.wav"
+        # s3_key = f'tts_outputs/{email_prefix}/{today}/{filename}'  # 원하면 고유 이름으로 변경
+        s3_key = f'tts_outputs/{email_prefix}/{today}/{filename}'  # 원하면 고유 이름으로 변경
+        s3_client.upload_fileobj(buffer, bucket_name, s3_key)
+
+        file_url = f'https://{bucket_name}.s3.amazonaws.com/{s3_key}'
+
+        response = {
+            "message": "TTS 생성 및 S3 업로드 성공",
+            "file_url": file_url
+        }
+
+        return Response(response, status=200)
+
+    except Exception as e:
+        return Response({'error': str(e)}, status=500)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def generate_resume_question(request):
+    bucket = settings.AWS_QUESTION_BUCKET_NAME
+    user_email = request.user.email.split('@')[0]
+    prefix = f"{user_email}/"
+
+    try:
+        s3 = boto3.client('s3')
+        response = s3.list_objects_v2(Bucket=bucket, Prefix=prefix)
+
+        files = sorted([obj['Key'] for obj in response.get('Contents', []) if obj['Key'].endswith('.txt')])
+        if not files:
+            return Response({"error": "No text files found in your S3 folder."}, status=404)
+
+        generated_files = []
+
+        for key in files:
+            # 텍스트 읽기
+            temp = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
+            s3.download_fileobj(Bucket=bucket, Key=key, Fileobj=temp)
+            temp.close()
+            with open(temp.name, 'r', encoding='utf-8') as f:
+                text = f.read().strip()
+
+            # --- 여기서 기존 tts_view 내부의 TTS 생성 로직 수행 ---
+            # (중복 방지를 위해 torch 설정 부분은 밖으로 빼는 게 좋음)
+            torch._dynamo.reset()
+            torch._dynamo.config.suppress_errors = True
+            torch._dynamo.disable()
+
+            audio_path = os.path.join(settings.BASE_DIR, "cloning_sample.wav")
+            speaker_wav, sampling_rate = torchaudio.load(audio_path)
+            speaker = model.make_speaker_embedding(speaker_wav, sampling_rate)
+
+            cond_dict = make_cond_dict(
+                text=text,
+                speaker=speaker,
+                language="ko",
+                emotion=[0.15, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8],
+                speaking_rate=23.0,
+                pitch_std=20.0,
+            )
+            conditioning = model.prepare_conditioning(cond_dict)
+            codes = model.generate(conditioning)
+            wavs = model.autoencoder.decode(codes).cpu()
+
+            buffer = io.BytesIO()
+            torchaudio.save(buffer, wavs[0], model.autoencoder.sampling_rate, format="wav")
+            buffer.seek(0)
+
+            # S3 업로드
+            s3_client = boto3.client('s3')
+            bucket_name = settings.AWS_TTS_BUCKET_NAME
+
+            today = datetime.now().strftime("%m%d")
+            filename = f"{os.path.basename(key).replace('.txt', '')}.wav"
+            s3_key = f'tts_outputs/{user_email}/{filename}'
+            s3_client.upload_fileobj(buffer, bucket_name, s3_key)
+
+            file_url = f'https://{bucket_name}.s3.amazonaws.com/{s3_key}'
+            generated_files.append({"text_file": key, "tts_file_url": file_url})
+
+        return Response({
+            "message": "TTS 생성 및 S3 업로드 성공 (batch)",
+            "results": generated_files
+        }, status=200)
+
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
