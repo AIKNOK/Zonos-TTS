@@ -22,7 +22,18 @@ from django.http import JsonResponse
 
 # Create your views here.
 # Zonos TTS 모델 로딩(로컬에서 1회만 실행할 수 있게 변경)
-model = Zonos.from_pretrained("./model/models--Zyphra--Zonos-v0.1-transformer", device=device)
+#model = Zonos.from_pretrained("./model/models--Zyphra--Zonos-v0.1-transformer", device=device)
+
+model = Zonos.from_pretrained("Zyphra/Zonos-v0.1-hybrid", device=device)
+
+audio_path = os.path.join(settings.BASE_DIR, "cloning_sample.wav")
+speaker_wav, sampling_rate = torchaudio.load(audio_path)
+speaker = model.make_speaker_embedding(speaker_wav, sampling_rate)
+
+# S3 업로드
+s3_client = boto3.client('s3')
+bucket_name = settings.AWS_TTS_BUCKET_NAME
+
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -38,21 +49,17 @@ def generate_followup_question(request):
         return Response({'error': 'text field is required'}, status=400)
 
     try:
-        torch._dynamo.reset()
-        torch._dynamo.config.suppress_errors = True
-        torch._dynamo.disable()
+        #torch._dynamo.reset()
+        #torch._dynamo.config.suppress_errors = True
+        #torch._dynamo.disable()
         # 임시 음성 파일 로딩 (스피커 임베딩을 위한 샘플 음성)
-        # 실제 환경에서는 사용자의 음성을 업로드받거나 기본값 지정
-        audio_path = os.path.join(settings.BASE_DIR, "cloning_sample.wav")
-        speaker_wav, sampling_rate = torchaudio.load(audio_path)
-        speaker = model.make_speaker_embedding(speaker_wav, sampling_rate)
 
         # 텍스트와 스피커 임베딩으로 conditioning 구성
         cond_dict = make_cond_dict(
             text=text,
             speaker=speaker,
             language="ko",
-            emotion=[0.15, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8],
+            emotion=[0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.9],
             speaking_rate=23.0,
             pitch_std=20.0,
         )
@@ -67,10 +74,6 @@ def generate_followup_question(request):
         # 메모리 버퍼에 wav 저장
         torchaudio.save(buffer, wavs[0], model.autoencoder.sampling_rate, format="wav")
         buffer.seek(0)  # 버퍼 위치 초기화
-
-        # S3 업로드
-        s3_client = boto3.client('s3')
-        bucket_name = settings.AWS_TTS_BUCKET_NAME
 
         today = datetime.now().strftime("%m%d")
         email_prefix = user.email.split('@')[0]
