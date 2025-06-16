@@ -21,9 +21,6 @@ from django.conf import settings
 from django.http import JsonResponse
 
 # Create your views here.
-# Zonos TTS 모델 로딩(로컬에서 1회만 실행할 수 있게 변경)
-#model = Zonos.from_pretrained("./model/models--Zyphra--Zonos-v0.1-transformer", device=device)
-
 model = Zonos.from_pretrained("Zyphra/Zonos-v0.1-hybrid", device=device)
 
 audio_path = os.path.join(settings.BASE_DIR, "cloning_sample.wav")
@@ -49,11 +46,6 @@ def generate_followup_question(request):
         return Response({'error': 'text field is required'}, status=400)
 
     try:
-        #torch._dynamo.reset()
-        #torch._dynamo.config.suppress_errors = True
-        #torch._dynamo.disable()
-        # 임시 음성 파일 로딩 (스피커 임베딩을 위한 샘플 음성)
-
         # 텍스트와 스피커 임베딩으로 conditioning 구성
         cond_dict = make_cond_dict(
             text=text,
@@ -78,7 +70,6 @@ def generate_followup_question(request):
         today = datetime.now().strftime("%m%d")
         email_prefix = user.email.split('@')[0]
         filename = f"질문 {question_number}.wav"
-        # s3_key = f'tts_outputs/{email_prefix}/{today}/{filename}'  # 원하면 고유 이름으로 변경
         s3_key = f'tts_outputs/{email_prefix}/{today}/{filename}'  # 원하면 고유 이름으로 변경
         s3_client.upload_fileobj(buffer, bucket_name, s3_key)
 
@@ -119,21 +110,11 @@ def generate_resume_question(request):
             with open(temp.name, 'r', encoding='utf-8') as f:
                 text = f.read().strip()
 
-            # --- 여기서 기존 tts_view 내부의 TTS 생성 로직 수행 ---
-            # (중복 방지를 위해 torch 설정 부분은 밖으로 빼는 게 좋음)
-            torch._dynamo.reset()
-            torch._dynamo.config.suppress_errors = True
-            torch._dynamo.disable()
-
-            audio_path = os.path.join(settings.BASE_DIR, "cloning_sample.wav")
-            speaker_wav, sampling_rate = torchaudio.load(audio_path)
-            speaker = model.make_speaker_embedding(speaker_wav, sampling_rate)
-
             cond_dict = make_cond_dict(
                 text=text,
                 speaker=speaker,
                 language="ko",
-                emotion=[0.15, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8],
+                emotion=[0.10, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.9],
                 speaking_rate=23.0,
                 pitch_std=20.0,
             )
@@ -145,13 +126,9 @@ def generate_resume_question(request):
             torchaudio.save(buffer, wavs[0], model.autoencoder.sampling_rate, format="wav")
             buffer.seek(0)
 
-            # S3 업로드
-            s3_client = boto3.client('s3')
-            bucket_name = settings.AWS_TTS_BUCKET_NAME
-
             today = datetime.now().strftime("%m%d")
             filename = f"{os.path.basename(key).replace('.txt', '')}.wav"
-            s3_key = f'tts_outputs/{user_email}/{filename}'
+            s3_key = f'tts_outputs/{user_email}/{today}/{filename}'
             s3_client.upload_fileobj(buffer, bucket_name, s3_key)
 
             file_url = f'https://{bucket_name}.s3.amazonaws.com/{s3_key}'
