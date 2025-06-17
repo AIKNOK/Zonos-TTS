@@ -51,7 +51,7 @@ def generate_followup_question(request):
             text=text,
             speaker=speaker,
             language="ko",
-            emotion=[0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.9],
+            emotion=[0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.95],
             speaking_rate=23.0,
             pitch_std=20.0,
         )
@@ -69,8 +69,8 @@ def generate_followup_question(request):
 
         today = datetime.now().strftime("%m%d")
         email_prefix = user.email.split('@')[0]
-        filename = f"질문 {question_number}.wav"
-        s3_key = f'tts_outputs/{email_prefix}/{today}/{filename}'  # 원하면 고유 이름으로 변경
+        filename = f"question{question_number}.wav"
+        s3_key = f'{email_prefix}/{filename}'  # 원하면 고유 이름으로 변경
         s3_client.upload_fileobj(buffer, bucket_name, s3_key)
 
         file_url = f'https://{bucket_name}.s3.amazonaws.com/{s3_key}'
@@ -126,9 +126,8 @@ def generate_resume_question(request):
             torchaudio.save(buffer, wavs[0], model.autoencoder.sampling_rate, format="wav")
             buffer.seek(0)
 
-            today = datetime.now().strftime("%m%d")
-            filename = f"{os.path.basename(key).replace('.txt', '')}.wav"
-            s3_key = f'tts_outputs/{user_email}/{today}/{filename}'
+            filename = f"{os.path.basename(key).replace('.txt',"")}.wav"
+            s3_key = f'{user_email}/{filename}'
             s3_client.upload_fileobj(buffer, bucket_name, s3_key)
 
             file_url = f'https://{bucket_name}.s3.amazonaws.com/{s3_key}'

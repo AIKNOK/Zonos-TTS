@@ -327,7 +327,7 @@ class Zonos(nn.Module):
         out_codes.masked_fill_(out_codes >= 1024, 0)
         out_codes = out_codes[..., : offset - 9]
 
-        silence_duration = int(86 * 0.15)
+        silence_duration = int(86 * 0.13)
         silence_codes = torch.zeros((out_codes.shape[0], out_codes.shape[1], silence_duration), dtype=out_codes.dtype, device=out_codes.device)
         # 마지막에 무음 코드 concat
         out_codes = torch.cat([out_codes, silence_codes], dim=2)
