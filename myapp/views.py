@@ -23,34 +23,15 @@ from itertools import cycle
 from django.http import JsonResponse
 
 # Create your views here.
-model_1 = Zonos.from_pretrained("Zyphra/Zonos-v0.1-hybrid", device=device)
-model_2 = Zonos.from_pretrained("Zyphra/Zonos-v0.1-hybrid", device=device)
-
+model = Zonos.from_pretrained("Zyphra/Zonos-v0.1-hybrid", device=device)
 
 audio_path = os.path.join(settings.BASE_DIR, "cloning_sample.wav")
 speaker_wav, sampling_rate = torchaudio.load(audio_path)
-speaker = model_1.make_speaker_embedding(speaker_wav, sampling_rate)
+speaker = model.make_speaker_embedding(speaker_wav, sampling_rate)
 
 # S3 업로드
 s3_client = boto3.client('s3')
 bucket_name = settings.AWS_TTS_BUCKET_NAME
-
-# 모델 접근을 위한 락 선언
-model_locks = {
-    "model_1": Lock(),
-    "model_2": Lock()
-}
-# 라운드 로빈 방식 모델 선택
-model_cycle = cycle(["model_1", "model_2"])
-
-def get_available_model():
-    for _ in range(2):  # 두 모델 중에서
-        model_name = next(model_cycle)
-        lock = model_locks[model_name]
-        if lock.acquire(blocking=False):  # 비점유 상태라면
-            return model_name, lock
-    return None, None  # 둘 다 점유중이면 None
-
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -60,18 +41,12 @@ def generate_followup_question(request):
     question_number = request.data.get('question_number')
     user = request.user
 
-    model_name, lock = get_available_model()
-    if not model_name:
-        return Response({'error': '모든 모델이 사용 중입니다. 나중에 다시 시도해주세요.'}, status=503)
-
     print("type(text):", type(text))
     print("text raw:", repr(text))
     if not text:
         return Response({'error': 'text field is required'}, status=400)
 
     try:
-        model = model_1 if model_name == "model_1" else model_2
-
         # 텍스트와 스피커 임베딩으로 conditioning 구성
         cond_dict = make_cond_dict(
             text=text,
@@ -108,8 +83,6 @@ def generate_followup_question(request):
         return Response(response, status=200)
     except Exception as e:
         return Response({'error': str(e)}, status=500)
-    finally:
-       lock.release()  # 반드시 락 해제!    
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -118,12 +91,7 @@ def generate_resume_question(request):
     user_email = request.user.email.split('@')[0]
     prefix = f"{user_email}/"
 
-    model_name, lock = get_available_model()
-    if not model_name:
-        return Response({'error': '모든 모델이 사용 중입니다. 나중에 다시 시도해주세요.'}, status=503)
-
     try:
-        model = model_1 if model_name == "model_1" else model_2
         s3 = boto3.client('s3')
         response = s3.list_objects_v2(Bucket=bucket, Prefix=prefix)
 
@@ -171,5 +139,3 @@ def generate_resume_question(request):
 
     except Exception as e:
         return Response({"error": str(e)}, status=500)
-    finally:
-       lock.release()  # 반드시 락 해제! 
