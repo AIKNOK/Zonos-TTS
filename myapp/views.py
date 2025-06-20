@@ -139,3 +139,6 @@ def generate_resume_question(request):
 
     except Exception as e:
         return Response({"error": str(e)}, status=500)
+    
+def health_check(request):
+    return JsonResponse({"status": "ok"})
