@@ -13,6 +13,7 @@ import io
 import hmac
 import hashlib
 import base64
+import re
 from zonos.model import Zonos
 from zonos.conditioning import make_cond_dict
 from zonos.utils import DEFAULT_DEVICE as device
@@ -95,13 +96,24 @@ def generate_resume_question(request):
         s3 = boto3.client('s3')
         response = s3.list_objects_v2(Bucket=bucket, Prefix=prefix)
 
-        files = sorted([obj['Key'] for obj in response.get('Contents', []) if obj['Key'].endswith('.txt')])
-        if not files:
+        #모든 questions.txt 읽기
+        all_txt_files = [
+            obj['Key'] for obj in response.get('Contents', [])
+            if obj['Key'].endswith('.txt')
+        ]
+
+        #questions2.txt ~ questions4.txt만 필터링
+        target_files = [
+            key for key in all_txt_files
+            if re.match(rf"{re.escape(prefix)}questions[234]\.txt$", key)
+        ]
+
+        if not target_files:
             return Response({"error": "No text files found in your S3 folder."}, status=404)
 
         generated_files = []
 
-        for key in files:
+        for key in sorted(target_files):
             # 텍스트 읽기
             temp = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
             s3.download_fileobj(Bucket=bucket, Key=key, Fileobj=temp)
