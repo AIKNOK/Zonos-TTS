@@ -143,9 +143,9 @@ def generate_resume_question(request):
             # 파일명 및 업로드
             filename = f"{os.path.basename(key).replace('.txt','')}.wav"
             s3_key = f'{user_email}/{filename}'
-            s3.upload_fileobj(buffer, bucket, s3_key)
+            s3.upload_fileobj(buffer, bucket_name, s3_key)
 
-            file_url = f'https://{bucket}.s3.amazonaws.com/{s3_key}'
+            file_url = f'https://{bucket_name}.s3.amazonaws.com/{s3_key}'
             generated_files.append({
                 "text_file": key,
                 "tts_file_url": file_url
