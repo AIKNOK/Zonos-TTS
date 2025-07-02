@@ -96,13 +96,13 @@ def generate_resume_question(request):
         s3 = boto3.client('s3')
         response = s3.list_objects_v2(Bucket=bucket, Prefix=prefix)
 
-        #모든 questions.txt 읽기
+        # .txt 파일 필터링
         all_txt_files = [
             obj['Key'] for obj in response.get('Contents', [])
             if obj['Key'].endswith('.txt')
         ]
 
-        #questions2.txt ~ questions4.txt만 필터링
+        # questions2.txt ~ questions4.txt만 추출
         target_files = [
             key for key in all_txt_files
             if re.match(rf"{re.escape(prefix)}questions[234]\.txt$", key)
@@ -114,13 +114,15 @@ def generate_resume_question(request):
         generated_files = []
 
         for key in sorted(target_files):
-            # 텍스트 읽기
+            # 텍스트 1개 다운로드
             temp = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
             s3.download_fileobj(Bucket=bucket, Key=key, Fileobj=temp)
             temp.close()
+
             with open(temp.name, 'r', encoding='utf-8') as f:
                 text = f.read().strip()
 
+            # TTS 생성
             cond_dict = make_cond_dict(
                 text=text,
                 speaker=speaker,
@@ -133,24 +135,30 @@ def generate_resume_question(request):
             codes = model.generate(conditioning)
             wavs = model.autoencoder.decode(codes).cpu()
 
+            # 메모리에 저장
             buffer = io.BytesIO()
             torchaudio.save(buffer, wavs[0], model.autoencoder.sampling_rate, format="wav")
             buffer.seek(0)
 
-            filename = f"{os.path.basename(key).replace('.txt',"")}.wav"
+            # 파일명 및 업로드
+            filename = f"{os.path.basename(key).replace('.txt','')}.wav"
             s3_key = f'{user_email}/{filename}'
-            s3_client.upload_fileobj(buffer, bucket_name, s3_key)
+            s3.upload_fileobj(buffer, bucket, s3_key)
 
-            file_url = f'https://{bucket_name}.s3.amazonaws.com/{s3_key}'
-            generated_files.append({"text_file": key, "tts_file_url": file_url})
+            file_url = f'https://{bucket}.s3.amazonaws.com/{s3_key}'
+            generated_files.append({
+                "text_file": key,
+                "tts_file_url": file_url
+            })
 
         return Response({
-            "message": "TTS 생성 및 S3 업로드 성공 (batch)",
+            "message": "TTS 생성 및 S3 업로드 성공 (순차 처리)",
             "results": generated_files
         }, status=200)
 
     except Exception as e:
         return Response({"error": str(e)}, status=500)
+
     
 def health_check(request):
     return JsonResponse({"status": "ok"})
