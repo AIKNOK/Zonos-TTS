@@ -70,7 +70,7 @@ def generate_followup_question(request):
         buffer.seek(0)  # 버퍼 위치 초기화
 
         email_prefix = user.email.split('@')[0]
-        filename = f"question{question_number}.wav"
+        filename = f"questions{question_number}.wav"
         s3_key = f'{email_prefix}/{filename}'  # 원하면 고유 이름으로 변경
         s3_client.upload_fileobj(buffer, bucket_name, s3_key)
 
